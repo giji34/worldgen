@@ -9,6 +9,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.File;
+
 public class Main extends JavaPlugin implements Listener {
     private GenerateTask task;
 
@@ -52,8 +54,8 @@ public class Main extends JavaPlugin implements Listener {
             player.sendMessage(ChatColor.RED + "別の generate コマンドが実行中です");
             return true;
         }
-        if (args.length != 4) {
-            player.sendMessage(ChatColor.RED + "引数が足りません");
+        if (args.length != 5) {
+            player.sendMessage(ChatColor.RED + "引数が足りません /generate minX minZ maxX maxZ version");
             return false;
         }
         int x0 = Integer.parseInt(args[0]) >> 4;
@@ -64,10 +66,19 @@ public class Main extends JavaPlugin implements Listener {
         int maxX = Math.max(x0, x1);
         int minZ = Math.min(z0, z1);
         int maxZ = Math.max(z0, z1);
+        String version = args[4];
         final World world = player.getWorld();
         Server server = getServer();
-        this.task = new GenerateTask(world, minX, minZ, maxX, maxZ);
+        GenerateTask task;
+        try {
+            task = new GenerateTask(world, minX, minZ, maxX, maxZ, version);
+        } catch (Exception e) {
+            player.sendMessage(ChatColor.RED + "タスクの起動エラー");
+            return true;
+        }
         server.getScheduler().runTaskTimer(this, task, 10, 1);
+        this.task = task;
+        player.sendMessage("タスクを起動しました");
         return true;
     }
 
@@ -76,7 +87,9 @@ public class Main extends JavaPlugin implements Listener {
             player.sendMessage(ChatColor.RED + "実行中の generate コマンドはありません");
             return true;
         }
-        this.task.cancel();
+        getServer().getScheduler().cancelTasks(this);
+        this.task = null;
+        player.sendMessage("タスクを終了させました");
         return true;
     }
 
@@ -87,11 +100,13 @@ public class Main extends JavaPlugin implements Listener {
         final int maxZ;
         final World world;
         boolean cancelSignaled;
+        final String version;
+        final int dimension;
 
         int x;
         int z;
 
-        GenerateTask(World world, int minX, int minZ, int maxX, int maxZ) {
+        GenerateTask(World world, int minX, int minZ, int maxX, int maxZ, String version) throws Exception {
             this.world = world;
             this.minX = minX;
             this.minZ = minZ;
@@ -100,19 +115,42 @@ public class Main extends JavaPlugin implements Listener {
             this.x = minX;
             this.z = minZ;
             this.cancelSignaled = false;
+            this.version = version;
+            switch (world.getEnvironment()) {
+                case NETHER:
+                    this.dimension = -1;
+                    break;
+                case THE_END:
+                    this.dimension = 1;
+                    break;
+                case NORMAL:
+                    this.dimension = 0;
+                    break;
+                default:
+                    throw new Exception("");
+            }
         }
 
         @Override
         public void run() {
+            if (x > maxX || this.cancelSignaled) {
+                return;
+            }
             long start = System.currentTimeMillis();
             long msPerTick = 1000 / 20;
             long maxElapsedMS = 5 * msPerTick;
             int count = 0;
+            File jar = getFile();
+            File directory = new File(new File(new File(new File(jar.getParent(), "giji34"), "wildblocks"), version), Integer.toString(dimension));
+            int generated = 0;
             while (!cancelSignaled) {
-                Chunk chunk = world.getChunkAt(x, z);
-                if (!chunk.load()) {
+                String name = "c." + x + "." + z + ".idx";
+                File idxFile = new File(directory, name);
+                if (!idxFile.exists()) {
+                    Chunk chunk = world.getChunkAt(x, z);
                     chunk.load(true);
                     chunk.unload(true);
+                    generated++;
                 }
                 count++;
                 long elapsed = System.currentTimeMillis() - start;
@@ -122,12 +160,11 @@ public class Main extends JavaPlugin implements Listener {
                     x += 1;
                     if (x > maxX) {
                         System.out.println("finished");
-                        this.cancel();
                         break;
                     }
                 }
                 if (elapsed > maxElapsedMS) {
-                    System.out.println("[" + x + ", " + z + "] " + count + " chunks; " + elapsed + " ms");
+                    System.out.println("[" + x + ", " + z + "] inspected " + count + " chunks, generated " + generated + " chunks, elapsed " + elapsed + " ms");
                     break;
                 }
             }
